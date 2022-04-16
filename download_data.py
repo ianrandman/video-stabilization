@@ -12,11 +12,17 @@ import sys
 
 DATA_DIR = os.path.join(os.path.dirname(__file__), 'data')
 ARCHIVE_PATH = os.path.join(DATA_DIR, 'DeepStab.zip')
+DATASET_DIR = os.path.join(DATA_DIR, 'DeepStab')
 
 URL = 'https://cg.cs.tsinghua.edu.cn/download/DeepStab.zip'
 
 
 def download_and_unpack_data():
+    if not os.path.exists(DATA_DIR):
+        os.makedirs(DATA_DIR)
+    if os.path.exists(DATASET_DIR):
+        shutil.rmtree(DATASET_DIR)
+
     # if the zip exists, try to unpack it
     retry = False
     if os.path.exists(ARCHIVE_PATH):
