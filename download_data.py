@@ -42,7 +42,7 @@ def download_and_unpack_data():
         # try to unpack zip
         print(f'Attempting to unpack {ARCHIVE_PATH}...')
         try:
-            shutil.unpack_archive(ARCHIVE_PATH, os.path.dirname(DATA_DIR))
+            shutil.unpack_archive(ARCHIVE_PATH, DATA_DIR)
         except EOFError:
             # give up if unpacking failed
             print('Archive cannot be unpacked')
