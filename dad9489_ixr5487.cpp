@@ -10,7 +10,10 @@
 #include <opencv2/highgui/highgui.hpp>
 
 
+#include <vector>
+#include <numeric>
 #include <iostream>
+
 
 using namespace cv;
 using namespace std;
@@ -79,6 +82,72 @@ vector<Transformation> smoothTrajectory(vector<Transformation> &trajectory, int 
     return smoothedTrajectory;
 }
 
+void evaluate(vector<Mat> &unstabilizedFrames, vector<Mat> &stabilizedFrames) {
+    Ptr<DescriptorMatcher> matcher = DescriptorMatcher::create(DescriptorMatcher::BRUTEFORCE);
+    BFMatcher bfMatcher;
+    Ptr<SIFT> siftPtr = SIFT::create();
+    int minMatchCount = 10;
+    double ratio = 0.7;
+
+    vector<double> croppingRatios;
+    vector<double> distortionValues;
+
+    Mat unstabilizedFrame, stabilizedFrame;
+    vector<KeyPoint> unstabilizedKeyPoints, stabilizedKeyPoints;
+    Mat unstabilizedDescriptors, stabilizedDescriptors;
+    vector<vector<DMatch>> matches;
+    for (int idx = 0; idx < unstabilizedFrames.size(); idx++) {
+        unstabilizedFrame = unstabilizedFrames[idx];
+        stabilizedFrame = stabilizedFrames[idx];
+
+        siftPtr->detectAndCompute(unstabilizedFrame, noArray(), unstabilizedKeyPoints, unstabilizedDescriptors);
+        siftPtr->detectAndCompute(stabilizedFrame, noArray(), stabilizedKeyPoints, stabilizedDescriptors);
+
+        bfMatcher.knnMatch(unstabilizedDescriptors, stabilizedDescriptors, matches, 2);
+
+        vector<DMatch> goodMatches;
+        for (vector<DMatch> matchPair : matches) {
+            if (matchPair.size() < 2) {
+                continue;
+            }
+
+            DMatch unstabilizedMatch = matchPair[0];
+            DMatch stabilizedMatch = matchPair[1];
+
+            if (unstabilizedMatch.distance < ratio * stabilizedMatch.distance) {
+                goodMatches.push_back(unstabilizedMatch);
+            }
+        }
+
+        if (goodMatches.size() < minMatchCount) {
+            continue;
+        }
+
+        vector<Point2f> sourcePoint2fs, destinationPoints2fs;
+        for (DMatch match: goodMatches) {
+            sourcePoint2fs.push_back(unstabilizedKeyPoints[match.queryIdx].pt);
+            destinationPoints2fs.push_back(stabilizedKeyPoints[match.trainIdx].pt);
+        }
+
+        Mat homography = estimateRigidTransform(sourcePoint2fs, destinationPoints2fs, false);
+        if (homography.data == nullptr) {
+            continue;
+        }
+
+        double scale = sqrt(
+                pow(homography.at<double>(0, 0), 2) +
+                        pow(homography.at<double>(0, 1), 2));
+
+        croppingRatios.push_back(1 / scale);
+
+
+        int x=1;
+    }
+
+    double crop = accumulate(croppingRatios.begin(), croppingRatios.end(), 0.0) / croppingRatios.size();
+    cout << "CROP: " << crop << endl;
+}
+
 
 int main( int argc, char** argv ) {
     const string dataDir = "data";
@@ -100,12 +169,14 @@ int main( int argc, char** argv ) {
     vector<Point2f> prevCorners, currCorners;
     vector<Transformation> transformations;
     int nFrames = int(capture.get(CAP_PROP_FRAME_COUNT));
+    vector<Mat> unstabilizedFrameGrays;
     while (true) {
         // load frame
         capture >> currFrame;
         if (currFrame.empty()) {
             break;
         }
+        unstabilizedFrameGrays.push_back(currFrame);
 
         // convert to grayscale
         cvtColor(currFrame, currFrameGray, COLOR_BGR2GRAY);
@@ -210,10 +281,11 @@ int main( int argc, char** argv ) {
     outputVideo.open("output.avi", outputVideo.fourcc('M', 'J', 'P', 'G'), 30,
                      Size(prevFrameGray.cols, prevFrameGray.rows / 2));
 
-    Mat unstabilizedFrame, stabilizedFrame, displayFrame;
+    Mat unstabilizedFrame, stabilizedFrame, stabilizedFrameGray, displayFrame;
     frameNum = 0;
     int displayWidth = int(2 * capture.get(CAP_PROP_FRAME_WIDTH));
     int displayHeight = int(capture.get(CAP_PROP_FRAME_HEIGHT));
+    vector<Mat> stabilizedFrameGrays;
     while (true) {
         // load unstabilized Frame
         capture >> unstabilizedFrame;
@@ -226,17 +298,23 @@ int main( int argc, char** argv ) {
         // apply the transformation matrix
         warpAffine(unstabilizedFrame, stabilizedFrame, transformationMatrix, unstabilizedFrame.size());
 
-        hconcat(unstabilizedFrame, stabilizedFrame, displayFrame);
-        resize(displayFrame, displayFrame, Size(displayFrame.cols/2, displayFrame.rows/2));
-        imshow("Unstabilized and Stabilized", displayFrame);
+        // convert to grayscale
+        cvtColor(stabilizedFrame, stabilizedFrameGray, COLOR_BGR2GRAY);
+        stabilizedFrameGrays.push_back(stabilizedFrameGray);
 
-//        // wait by the frame period of the original video (converted to milliseconds)
-//        waitKey(int(1000.0 * (1 / capture.get(CAP_PROP_FPS))));
-        waitKey(10);
-        outputVideo << displayFrame;
+//        hconcat(unstabilizedFrame, stabilizedFrame, displayFrame);
+//        resize(displayFrame, displayFrame, Size(displayFrame.cols/2, displayFrame.rows/2));
+//        imshow("Unstabilized and Stabilized", displayFrame);
+//
+////        // wait by the frame period of the original video (converted to milliseconds)
+////        waitKey(int(1000.0 * (1 / capture.get(CAP_PROP_FPS))));
+//        waitKey(10);
+//        outputVideo << displayFrame;
 
         frameNum++;
     }
+
+    evaluate(unstabilizedFrameGrays, stabilizedFrameGrays);
 
 
     return 0;
