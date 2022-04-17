@@ -60,7 +60,9 @@ vector<Transformation> smoothTrajectory(vector<Transformation> &trajectory, int 
     for (int idx = 0; idx < trajectory.size(); idx++) {
         // calculate average trajectory for trajectory at idx by smoothing it with surrounding trajectory
 
-        double x, y, a = 0;
+        double x = 0;
+        double y = 0;
+        double a = 0;
         int count = 0;
         for (int jdx = -smoothRadius; jdx <= smoothRadius; jdx++) {
             if ((idx + jdx) >= 0 && (idx + jdx) < trajectory.size()) {
@@ -153,7 +155,7 @@ int main( int argc, char** argv ) {
     const string dataDir = "data";
     const string unstable_dir = dataDir + "/DeepStab/unstable";
 
-    const string filePath = unstable_dir + "/" + (string) argv[1];
+    const string filePath = unstable_dir + "/" + "1.avi";
 
     VideoCapture capture( samples::findFile( filePath ) );
     if (!capture.isOpened()){
