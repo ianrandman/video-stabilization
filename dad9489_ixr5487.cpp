@@ -101,7 +101,7 @@ int main( int argc, char** argv ) {
     vector<Transformation> transformations;
     int nFrames = int(capture.get(CAP_PROP_FRAME_COUNT));
     while (true) {
-        // load unstabilizedFrame
+        // load frame
         capture >> currFrame;
         if (currFrame.empty()) {
             break;
@@ -128,16 +128,12 @@ int main( int argc, char** argv ) {
                              useHarrisDetector,
                              k );
 
-        assert(prevCorners != currCorners);
-
-
         // need both current and previous frame
         if (!prevFrameGray.empty()) {
             // calculate optical flow
             vector<uchar> status;
             vector<float> err;
-            TermCriteria criteria = TermCriteria((TermCriteria::COUNT) + (TermCriteria::EPS), 10, 0.03);
-            calcOpticalFlowPyrLK(prevFrameGray, currFrameGray, prevCorners, currCorners, status, err, Size(15, 15), 2, criteria);
+            calcOpticalFlowPyrLK(prevFrameGray, currFrameGray, prevCorners, currCorners, status, err);
 
             // remove invalid points
             for (int idx = status.size() - 1; idx >= 0; idx--) {
@@ -150,18 +146,18 @@ int main( int argc, char** argv ) {
 
             // compute the transformation matrix between the previous frame and the current frame
             // fullAffine=true for more degrees of freedom
-            Mat transformMatrix = estimateRigidTransform(prevCorners, currCorners, false);
+            Mat transformMatrix = estimateRigidTransform(prevCorners, currCorners, true);
             // transformation matrix may be null; use previous
             if (transformMatrix.data == nullptr) {
                 transformMatrix = transformations[transformations.size() - 1].getTransformMatrix();
             }
 
             transformations.emplace_back(Transformation(transformMatrix));
-        } else {
-            // copy current stuff to previous stuff
-            currFrameGray.copyTo(prevFrameGray);
-            prevCorners = currCorners;  // TODO maybe clone
         }
+
+        // copy current stuff to previous stuff
+        currFrameGray.copyTo(prevFrameGray);
+        prevCorners = currCorners;  // TODO maybe clone
 
         frameNum++;
         cout << "Processed " << frameNum << "/" << nFrames << endl;
@@ -182,8 +178,14 @@ int main( int argc, char** argv ) {
         trajectory.push_back(newTrajectory);
     }
 
+    vector<Transformation> smoothedTrajectory = smoothTrajectory(trajectory, 64);
+//    for (auto radius: {4, 8, 16, 64}) {
+//        smoothedTrajectory = smoothTrajectory(smoothedTrajectory, radius);
+//    }
+    for (auto radius: {32, 16, 8, 4}) {
+        smoothedTrajectory = smoothTrajectory(smoothedTrajectory, radius);
+    }
 
-    vector<Transformation> smoothedTrajectory = smoothTrajectory(trajectory, 50);
     vector<Transformation> smoothedTransformations;
 
     // calculate difference between smoothed trajectory and original trajectory
@@ -202,6 +204,11 @@ int main( int argc, char** argv ) {
 
     // go back to start of video (second frame)
     capture.set(CAP_PROP_POS_FRAMES, 1);
+
+    // initialize output video
+    VideoWriter outputVideo;
+    outputVideo.open("output.avi", outputVideo.fourcc('M', 'J', 'P', 'G'), 30,
+                     Size(prevFrameGray.cols, prevFrameGray.rows / 2));
 
     Mat unstabilizedFrame, stabilizedFrame, displayFrame;
     frameNum = 0;
@@ -223,8 +230,10 @@ int main( int argc, char** argv ) {
         resize(displayFrame, displayFrame, Size(displayFrame.cols/2, displayFrame.rows/2));
         imshow("Unstabilized and Stabilized", displayFrame);
 
-        // wait by the frame period of the original video (converted to milliseconds)
-        waitKey(int(1000.0 * (1 / capture.get(CAP_PROP_FPS))));
+//        // wait by the frame period of the original video (converted to milliseconds)
+//        waitKey(int(1000.0 * (1 / capture.get(CAP_PROP_FPS))));
+        waitKey(10);
+        outputVideo << displayFrame;
 
         frameNum++;
     }
