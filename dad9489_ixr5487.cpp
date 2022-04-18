@@ -1,5 +1,7 @@
 /**
- * Perform video stabilization
+ * Perform video stabilization using affine transformations.
+ * Track points across a video, build up transformations between pairs of frames,
+ * sum them to build a trajectory, smooth the trajectory, then apply smoothed transformations.
  */
 
 #include <opencv2/imgcodecs.hpp>
@@ -20,13 +22,19 @@ using namespace std;
 
 
 struct Transformation {
+    // represents a transformation matrix between two frames
+    // only accounts for translation and angle
+
     Transformation() {}
+
+    // constructor given values
     Transformation(double _dx, double _dy, double _da) {
         dx = _dx;
         dy = _dy;
         da = _da;
     }
 
+    // constructor given matrix
     Transformation(Mat &transformationMatrix) {
         // decompose into translation and rotation
         dx = transformationMatrix.at<double>(0,2);
@@ -38,6 +46,7 @@ struct Transformation {
     double dy;
     double da; // angle
 
+    // reproduce matrix given values
     Mat getTransformMatrix() const {
         Mat transformationMatrix(2,3, CV_64F);
 
@@ -55,8 +64,11 @@ struct Transformation {
 };
 
 vector<Transformation> smoothTrajectory(vector<Transformation> &trajectory, int smoothRadius) {
+    // smooth a trajectory, which is a cumulative sum of transformations
+
     vector<Transformation> smoothedTrajectory;
 
+    // iterate over each frame in the trajectory
     for (int idx = 0; idx < trajectory.size(); idx++) {
         // calculate average trajectory for trajectory at idx by smoothing it with surrounding trajectory
 
@@ -64,6 +76,8 @@ vector<Transformation> smoothTrajectory(vector<Transformation> &trajectory, int 
         double y = 0;
         double a = 0;
         int count = 0;
+
+        // average over a window defined by smoothRadius
         for (int jdx = -smoothRadius; jdx <= smoothRadius; jdx++) {
             if ((idx + jdx) >= 0 && (idx + jdx) < trajectory.size()) {
                 x += trajectory[idx + jdx].dx;
@@ -78,6 +92,7 @@ vector<Transformation> smoothTrajectory(vector<Transformation> &trajectory, int 
         y /= count;
         a /= count;
 
+        // make new smoothed trajectory
         smoothedTrajectory.emplace_back(Transformation(x, y, a));
     }
 
@@ -85,6 +100,8 @@ vector<Transformation> smoothTrajectory(vector<Transformation> &trajectory, int 
 }
 
 void evaluate(vector<Mat> &unstabilizedFrames, vector<Mat> &stabilizedFrames) {
+    // unused evaluation metric for crop
+
     Ptr<DescriptorMatcher> matcher = DescriptorMatcher::create(DescriptorMatcher::BRUTEFORCE);
     BFMatcher bfMatcher;
     Ptr<SIFT> siftPtr = SIFT::create();
@@ -152,12 +169,14 @@ void evaluate(vector<Mat> &unstabilizedFrames, vector<Mat> &stabilizedFrames) {
 
 
 int stabilizeVideo(string filePath, string outDir) {
+    // open a video, stabilize it, then output the new video side-by-side with the old
 
+    // open the video
     VideoCapture capture(samples::findFile(filePath));
     if (!capture.isOpened()) {
         // error in opening the video input
         cerr << "Unable to open: " << filePath << endl;
-        return 0;
+        return 1;
     }
 
     // iterate over all frames in the video
@@ -172,14 +191,14 @@ int stabilizeVideo(string filePath, string outDir) {
         // load frame
         capture >> currFrame;
         if (currFrame.empty()) {
-            break;
+            break;  // no more frames
         }
         unstabilizedFrameGrays.push_back(currFrame);
 
         // convert to grayscale
         cvtColor(currFrame, currFrameGray, COLOR_BGR2GRAY);
 
-
+        // find tracking features and store them
         int maxCorners = 150;
         double qualityLevel = 0.01;
         double minDistance = 30;
@@ -198,29 +217,40 @@ int stabilizeVideo(string filePath, string outDir) {
             k);
 
         // need both current and previous frame
+        // use previous transformation if there is an issue
         if (!prevFrameGray.empty()) {
-            // calculate optical flow
-            vector<uchar> status;
-            vector<float> err;
-            calcOpticalFlowPyrLK(prevFrameGray, currFrameGray, prevCorners, currCorners, status, err);
+            Mat transformMatrix;
+            if (!prevCorners.empty() && !currCorners.empty()) {
+                // calculate optical flow
+                vector<uchar> status;
+                vector<float> err;
+                calcOpticalFlowPyrLK(prevFrameGray, currFrameGray, prevCorners, currCorners, status, err);
 
-            // remove invalid points
-            for (int idx = status.size() - 1; idx >= 0; idx--) {
-                if (!status[idx]) { // if invalid
-                    // remove the points
-                    prevCorners.erase(prevCorners.begin() + idx);
-                    currCorners.erase(currCorners.begin() + idx);
+                // remove invalid points
+                for (int idx = status.size() - 1; idx >= 0; idx--) {
+                    if (!status[idx]) { // if invalid
+                        // remove the points
+                        prevCorners.erase(prevCorners.begin() + idx);
+                        currCorners.erase(currCorners.begin() + idx);
+                    }
                 }
-            }
 
-            // compute the transformation matrix between the previous frame and the current frame
-            // fullAffine=true for more degrees of freedom
-            Mat transformMatrix = estimateRigidTransform(prevCorners, currCorners, true);
-            // transformation matrix may be null; use previous
-            if (transformMatrix.data == nullptr) {
+                if (!prevCorners.empty() && !currCorners.empty()) {
+
+                    // compute the transformation matrix between the previous frame and the current frame
+                    // fullAffine=true for more degrees of freedom
+                    transformMatrix = estimateRigidTransform(prevCorners, currCorners, true);
+                    // transformation matrix may be null; use previous
+                    if (transformMatrix.data == nullptr) {
+                        transformMatrix = transformations[transformations.size() - 1].getTransformMatrix();
+                    }
+                } else {
+                    transformMatrix = transformations[transformations.size() - 1].getTransformMatrix();
+                }
+
+            } else {
                 transformMatrix = transformations[transformations.size() - 1].getTransformMatrix();
             }
-
             transformations.emplace_back(Transformation(transformMatrix));
         }
 
@@ -248,6 +278,7 @@ int stabilizeVideo(string filePath, string outDir) {
         trajectory.push_back(newTrajectory);
     }
 
+    // smooth the trajectory over multiple radii
     vector<Transformation> smoothedTrajectory = smoothTrajectory(trajectory, 64);
     //    for (auto radius: {4, 8, 16, 64}) {
     //        smoothedTrajectory = smoothTrajectory(smoothedTrajectory, radius);
@@ -281,10 +312,9 @@ int stabilizeVideo(string filePath, string outDir) {
     outputVideo.open(outFilename, outputVideo.fourcc('M', 'J', 'P', 'G'), capture.get(CAP_PROP_FPS),
         Size(prevFrameGray.cols, prevFrameGray.rows / 2));
 
+    // stabilize each frame
     Mat unstabilizedFrame, stabilizedFrame, stabilizedFrameGray, displayFrame;
     frameNum = 0;
-    int displayWidth = int(2 * capture.get(CAP_PROP_FRAME_WIDTH));
-    int displayHeight = int(capture.get(CAP_PROP_FRAME_HEIGHT));
     vector<Mat> stabilizedFrameGrays;
     while (true) {
         // load unstabilized Frame
@@ -302,13 +332,14 @@ int stabilizeVideo(string filePath, string outDir) {
         cvtColor(stabilizedFrame, stabilizedFrameGray, COLOR_BGR2GRAY);
         stabilizedFrameGrays.push_back(stabilizedFrameGray);
 
+        // put the unstabilized and stabilized videos side by side
         hconcat(unstabilizedFrame, stabilizedFrame, displayFrame);
         resize(displayFrame, displayFrame, Size(displayFrame.cols/2, displayFrame.rows/2));
         //imshow("Unstabilized and Stabilized", displayFrame);
         
 //        // wait by the frame period of the original video (converted to milliseconds)
 //        waitKey(int(1000.0 * (1 / capture.get(CAP_PROP_FPS))));
-        //waitKey(10);
+        // write to the output
         outputVideo << displayFrame;
 
         frameNum++;
@@ -327,18 +358,18 @@ int main( int argc, char** argv ) {
 
     string outDir = dataDir + "/DeepStab/out";
 
-    // Gather image filenames
+    // gather unstable image filenames
     String folder = unstableDir + "/*.avi";
     vector<String> filepaths;
     glob(folder, filepaths);
 
-    stabilizeVideo(filepaths[7], outDir);
-    //int counter = 0;
-    //for (String filepath: filepaths) {
-    //    counter++;
-    //    cout << "Beginning processing of video " << counter << "/" << filepaths.size() << endl;
-    //    stabilizeVideo(filepath, outDir);
-    //}
+    // stabilize each of the unstable videos and store in outDir
+    int counter = 0;
+    for (String filepath: filepaths) {
+        counter++;
+        cout << "Beginning processing of video " << counter << "/" << filepaths.size() << endl;
+        stabilizeVideo(filepath, outDir);
+    }
 
     return 0;
 }
