@@ -142,7 +142,7 @@ void evaluate(vector<Mat> &unstabilizedFrames, vector<Mat> &stabilizedFrames) {
 
         croppingRatios.push_back(1 / scale);
 
-
+        cout << "Evaluated " << idx + 1 << "/" << unstabilizedFrames.size() << endl;
         int x=1;
     }
 
@@ -151,14 +151,10 @@ void evaluate(vector<Mat> &unstabilizedFrames, vector<Mat> &stabilizedFrames) {
 }
 
 
-int main( int argc, char** argv ) {
-    const string dataDir = "data";
-    const string unstable_dir = dataDir + "/DeepStab/unstable";
+int stabilizeVideo(string filePath, string outDir) {
 
-    const string filePath = unstable_dir + "/" + "1.avi";
-
-    VideoCapture capture( samples::findFile( filePath ) );
-    if (!capture.isOpened()){
+    VideoCapture capture(samples::findFile(filePath));
+    if (!capture.isOpened()) {
         // error in opening the video input
         cerr << "Unable to open: " << filePath << endl;
         return 0;
@@ -190,16 +186,16 @@ int main( int argc, char** argv ) {
         int blockSize = 3, gradientSize = 3;
         bool useHarrisDetector = false;
         double k = 0.04;
-        goodFeaturesToTrack( currFrameGray, // TODO maybe use SIFT
-                             currCorners,
-                             maxCorners,
-                             qualityLevel,
-                             minDistance,
-                             Mat(),
-                             blockSize,
-                             gradientSize,
-                             useHarrisDetector,
-                             k );
+        goodFeaturesToTrack(currFrameGray, // TODO maybe use SIFT
+            currCorners,
+            maxCorners,
+            qualityLevel,
+            minDistance,
+            Mat(),
+            blockSize,
+            gradientSize,
+            useHarrisDetector,
+            k);
 
         // need both current and previous frame
         if (!prevFrameGray.empty()) {
@@ -233,7 +229,8 @@ int main( int argc, char** argv ) {
         prevCorners = currCorners;  // TODO maybe clone
 
         frameNum++;
-        cout << "Processed " << frameNum << "/" << nFrames << endl;
+        cout << "Processed frame " << frameNum << "/" << nFrames << endl;
+
     }
 
     // trajectory is a cumulative sum of transformations
@@ -245,17 +242,17 @@ int main( int argc, char** argv ) {
 
         // add the current transformation to the previous trajectory
         Transformation newTrajectory = Transformation(
-                prevTrajectory.dx + transformation.dx,
-                prevTrajectory.dy + transformation.dy,
-                prevTrajectory.da + transformation.da);
+            prevTrajectory.dx + transformation.dx,
+            prevTrajectory.dy + transformation.dy,
+            prevTrajectory.da + transformation.da);
         trajectory.push_back(newTrajectory);
     }
 
     vector<Transformation> smoothedTrajectory = smoothTrajectory(trajectory, 64);
-//    for (auto radius: {4, 8, 16, 64}) {
-//        smoothedTrajectory = smoothTrajectory(smoothedTrajectory, radius);
-//    }
-    for (auto radius: {32, 16, 8, 4}) {
+    //    for (auto radius: {4, 8, 16, 64}) {
+    //        smoothedTrajectory = smoothTrajectory(smoothedTrajectory, radius);
+    //    }
+    for (auto radius : { 32, 16, 8, 4 }) {
         smoothedTrajectory = smoothTrajectory(smoothedTrajectory, radius);
     }
 
@@ -269,9 +266,9 @@ int main( int argc, char** argv ) {
 
         // add this difference back onto original transformations
         smoothedTransformations.emplace_back(Transformation(
-                transformations[idx].dx + diffX,
-                transformations[idx].dy + diffY,
-                transformations[idx].da + diffA
+            transformations[idx].dx + diffX,
+            transformations[idx].dy + diffY,
+            transformations[idx].da + diffA
         ));
     }
 
@@ -280,8 +277,9 @@ int main( int argc, char** argv ) {
 
     // initialize output video
     VideoWriter outputVideo;
-    outputVideo.open("output.avi", outputVideo.fourcc('M', 'J', 'P', 'G'), 30,
-                     Size(prevFrameGray.cols, prevFrameGray.rows / 2));
+    String outFilename = outDir + "/" + filePath.substr(filePath.find_last_of("/\\") + 1);
+    outputVideo.open(outFilename, outputVideo.fourcc('M', 'J', 'P', 'G'), capture.get(CAP_PROP_FPS),
+        Size(prevFrameGray.cols, prevFrameGray.rows / 2));
 
     Mat unstabilizedFrame, stabilizedFrame, stabilizedFrameGray, displayFrame;
     frameNum = 0;
@@ -304,20 +302,43 @@ int main( int argc, char** argv ) {
         cvtColor(stabilizedFrame, stabilizedFrameGray, COLOR_BGR2GRAY);
         stabilizedFrameGrays.push_back(stabilizedFrameGray);
 
-//        hconcat(unstabilizedFrame, stabilizedFrame, displayFrame);
-//        resize(displayFrame, displayFrame, Size(displayFrame.cols/2, displayFrame.rows/2));
-//        imshow("Unstabilized and Stabilized", displayFrame);
-//
-////        // wait by the frame period of the original video (converted to milliseconds)
-////        waitKey(int(1000.0 * (1 / capture.get(CAP_PROP_FPS))));
-//        waitKey(10);
-//        outputVideo << displayFrame;
+        hconcat(unstabilizedFrame, stabilizedFrame, displayFrame);
+        resize(displayFrame, displayFrame, Size(displayFrame.cols/2, displayFrame.rows/2));
+        //imshow("Unstabilized and Stabilized", displayFrame);
+        
+//        // wait by the frame period of the original video (converted to milliseconds)
+//        waitKey(int(1000.0 * (1 / capture.get(CAP_PROP_FPS))));
+        //waitKey(10);
+        outputVideo << displayFrame;
 
         frameNum++;
     }
 
-    evaluate(unstabilizedFrameGrays, stabilizedFrameGrays);
+    //evaluate(unstabilizedFrameGrays, stabilizedFrameGrays);
 
+    return 0;
+}
+
+
+int main( int argc, char** argv ) {
+    
+    const string dataDir = "data";
+    const string unstableDir = dataDir + "/DeepStab/unstable";
+
+    string outDir = dataDir + "/DeepStab/out";
+
+    // Gather image filenames
+    String folder = unstableDir + "/*.avi";
+    vector<String> filepaths;
+    glob(folder, filepaths);
+
+    stabilizeVideo(filepaths[7], outDir);
+    //int counter = 0;
+    //for (String filepath: filepaths) {
+    //    counter++;
+    //    cout << "Beginning processing of video " << counter << "/" << filepaths.size() << endl;
+    //    stabilizeVideo(filepath, outDir);
+    //}
 
     return 0;
 }
